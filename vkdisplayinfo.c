@@ -83,6 +83,12 @@ static int display2_info(VkInstance instance,
 
     VkDisplayProperties2KHR *display_props =
         malloc(sizeof(VkDisplayProperties2KHR) * num_display_props);
+
+    for (uint32_t i = 0; i < num_display_props; i++) {
+      display_props[i].sType = VK_STRUCTURE_TYPE_DISPLAY_PROPERTIES_2_KHR;
+      display_props[i].pNext = NULL;
+    }
+
     result = _vkGetPhysicalDeviceDisplayProperties2KHR(
         physical_device, &num_display_props, display_props);
     if (result != VK_SUCCESS) {
