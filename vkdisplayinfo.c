@@ -43,7 +43,7 @@ static int display_info(VkInstance instance, VkPhysicalDevice *physical_devices,
 
     for (uint32_t j = 0; j < num_display_props; j++) {
       VkDisplayPropertiesKHR *display_prop = &display_props[j];
-      printf("%s (%p) ", display_prop->displayName,
+      printf("[%d] %s (%p) ", j, display_prop->displayName,
              (void *)display_prop->display);
       printf("%dx%d\n", display_prop->physicalResolution.width,
              display_prop->physicalResolution.height);
