@@ -4,6 +4,8 @@
  * @file
  * @brief  Simple Vulkan display info
  * @author Christoph Haag <christoph.haag@collabora.com>
+ * 
+ * xcb/randr code taken from monado
  */
 
 #include <stdbool.h>
@@ -137,142 +139,42 @@ struct comp_window_direct_randr_display
   VkDisplayKHR display;
 };
 
-int main(void)
+VkDisplayKHR get_display(VkInstance instance,
+                         PFN_vkGetRandROutputDisplayEXT _vkGetRandROutputDisplayEXT,
+                         char *override)
 {
-  printf("vkdisplayinfo\n");
-  printf("=============\n");
-
   VkResult result;
-
-  struct {
-    bool display;
-    bool display2;
-    bool surface;
-  } exts = {false};
-
-  {
-    uint32_t num_supported_exts = 0;
-    result =
-        vkEnumerateInstanceExtensionProperties(NULL, &num_supported_exts, NULL);
-    if (result != VK_SUCCESS) {
-      printf("Failed to get number of supported extensions\n");
-      return 1;
-    }
-
-    VkExtensionProperties *ext_props =
-        malloc(sizeof(VkExtensionProperties) * num_supported_exts);
-    result = vkEnumerateInstanceExtensionProperties(NULL, &num_supported_exts,
-                                                    ext_props);
-    if (result != VK_SUCCESS) {
-      printf("Failed to get supported extensions\n");
-      return 1;
-    }
-
-    for (uint32_t i = 0; i < num_supported_exts; i++) {
-      if (strcmp(VK_KHR_DISPLAY_EXTENSION_NAME, ext_props[i].extensionName) ==
-          0) {
-        exts.display = true;
-        printf("instance extension %s is supported\n",
-               VK_KHR_DISPLAY_EXTENSION_NAME);
-      } else if (strcmp(VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME,
-                        ext_props[i].extensionName) == 0) {
-        exts.display2 = true;
-        printf("instance extension %s is supported\n",
-               VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME);
-      } else if (strcmp(VK_KHR_SURFACE_EXTENSION_NAME,
-                        ext_props[i].extensionName) == 0) {
-        exts.surface = true;
-        printf("instance extension %s is supported\n",
-               VK_KHR_SURFACE_EXTENSION_NAME);
-      }
-    }
-  }
-
-  if (!exts.surface) {
-    printf("Instance Extension %s is required\n",
-           VK_KHR_SURFACE_EXTENSION_NAME);
-    return 1;
-  }
-  if (!exts.display && !exts.display2) {
-    printf("Instance Extension %s or %s is required\n",
-           VK_KHR_DISPLAY_EXTENSION_NAME,
-           VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME);
-    return 1;
-  }
-
-  // VK_KHR_DISPLAY_EXTENSION_NAME and VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME
-#define optional_exts 2
-
-  const char *instance_exts[3 + optional_exts] = {
-      VK_KHR_SURFACE_EXTENSION_NAME,
-      VK_EXT_ACQUIRE_XLIB_DISPLAY_EXTENSION_NAME,
-      VK_EXT_DIRECT_MODE_DISPLAY_EXTENSION_NAME,
-  };
-  uint32_t num_instance_exts = 3;
-
-  if (exts.display) {
-    instance_exts[num_instance_exts++] = VK_KHR_DISPLAY_EXTENSION_NAME;
-  }
-  if (exts.display2) {
-    instance_exts[num_instance_exts++] =
-        VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME;
-  }
-
-  const VkApplicationInfo application_info = {
-      .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-      .apiVersion = VK_API_VERSION_1_0,
-      .applicationVersion = 1,
-      .engineVersion = 0,
-      .pApplicationName = "vkdisplayinfo",
-      .pEngineName = NULL,
-  };
-
-  VkInstanceCreateInfo instance_info = {
-      .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-      .ppEnabledExtensionNames = (const char **)instance_exts,
-      .enabledExtensionCount = num_instance_exts,
-      .pApplicationInfo = &application_info,
-
-  };
-
-  VkInstance instance;
-  result = vkCreateInstance(&instance_info, NULL, &instance);
-  if (result != VK_SUCCESS) {
-    printf("Failed to create vulkan instance\n");
-    return 1;
-  }
 
   uint32_t num_physical_devices = 0;
   result = vkEnumeratePhysicalDevices(instance, &num_physical_devices, NULL);
   if (result != VK_SUCCESS) {
     printf("Failed to get number of physical devices\n");
-    return 1;
+    return VK_NULL_HANDLE;
   }
 
-  VkPhysicalDevice *physical_devices =
-      malloc(sizeof(VkPhysicalDevice) * num_physical_devices);
-  result = vkEnumeratePhysicalDevices(instance, &num_physical_devices,
-                                      physical_devices);
+  VkPhysicalDevice *physical_devices = malloc(sizeof(VkPhysicalDevice) * num_physical_devices);
+  result = vkEnumeratePhysicalDevices(instance, &num_physical_devices, physical_devices);
   if (result != VK_SUCCESS) {
     printf("Failed to get physical devices\n");
-    return 1;
+    return VK_NULL_HANDLE;
   }
 
   Display *dpy = XOpenDisplay(NULL);
   if (dpy == NULL) {
     printf("Could not open X display.");
-    return 1;
+    return VK_NULL_HANDLE;
   }
 
   xcb_connection_t *connection = XGetXCBConnection(dpy);
+
+  uint32_t display_count = 0;
+  struct comp_window_direct_randr_display displays[100] = {0};
 
   // comp_window_direct_randr_init
   {
     xcb_screen_iterator_t iter = xcb_setup_roots_iterator(xcb_get_setup(connection));
 
     xcb_screen_t *screen = NULL;
-    uint32_t display_count = 0;
-    struct comp_window_direct_randr_display displays[50] = {0};
     while (iter.rem > 0 && display_count == 0) {
       screen = iter.data;
 
@@ -286,7 +188,7 @@ int main(void)
 
         if (version_reply == NULL) {
             printf("Could not get RandR version.\n");
-            return 1;
+            return VK_NULL_HANDLE;
         }
 
         printf("RandR version %d.%d\n", version_reply->major_version, version_reply->minor_version);
@@ -309,18 +211,18 @@ int main(void)
         if (error != NULL) {
             free(non_desktop_reply);
             printf("xcb_intern_atom_reply returned error %d\n", error->error_code);
-            return 1;
+            return VK_NULL_HANDLE;
         }
 
         if (non_desktop_reply == NULL) {
             printf("non-desktop reply NULL\n");
-            return 1;
+            return VK_NULL_HANDLE;
         }
 
         if (non_desktop_reply->atom == XCB_NONE) {
             free(non_desktop_reply);
             printf("No output has non-desktop property\n");
-            return 1;
+            return VK_NULL_HANDLE;
         }
 
         xcb_randr_get_screen_resources_cookie_t resources_cookie
@@ -420,15 +322,7 @@ int main(void)
                     memcpy(d.name, name, name_len);
                     d.name[name_len] = '\0';
 
-                    display_count += 1;
-
                     {
-                        static PFN_vkGetRandROutputDisplayEXT _vkGetRandROutputDisplayEXT = NULL;
-                        if (_vkGetRandROutputDisplayEXT == NULL) {
-                            _vkGetRandROutputDisplayEXT = (PFN_vkGetRandROutputDisplayEXT)
-                                vkGetInstanceProcAddr(instance, "vkGetRandROutputDisplayEXT");
-                        }
-
                         // TODO: other physical devices?
                         VkResult ret = _vkGetRandROutputDisplayEXT(physical_devices[0],
                                                                    dpy,
@@ -436,7 +330,7 @@ int main(void)
                                                                    &d.display);
                         if (ret != VK_SUCCESS) {
                             printf("vkGetRandROutputDisplayEXT failed: %d\n", ret);
-                            return 1;
+                            return VK_NULL_HANDLE;
                         }
 
                         if (d.display == VK_NULL_HANDLE) {
@@ -446,6 +340,8 @@ int main(void)
                             continue;
                         }
                     }
+
+                    display_count += 1;
 
                     displays[display_count - 1] = d;
                     printf("randr display #%d: %s with primary mode %dx%d\n",
@@ -467,6 +363,13 @@ int main(void)
     }
   }
 
+  for (uint32_t i = 0; i < display_count; i++) {
+    if (override != NULL && strcmp(displays[i].name, override) == 0) {
+      printf("override found: returning VkDisplayKHR for %s\n", displays[i].name);
+      return displays[i].display;
+    }
+  }
+
   int ret = 0;
   //
   //    if (exts.display2) {
@@ -481,5 +384,109 @@ int main(void)
 
   vkDestroyInstance(instance, NULL);
 
-  return ret;
+  return NULL;
+}
+
+int main(void)
+{
+  printf("vkdisplayhacksteamvr\n");
+  printf("=============\n");
+
+  VkResult result;
+
+  struct
+  {
+    bool display;
+    bool display2;
+    bool surface;
+  } exts = {false};
+
+  {
+    uint32_t num_supported_exts = 0;
+    result = vkEnumerateInstanceExtensionProperties(NULL, &num_supported_exts, NULL);
+    if (result != VK_SUCCESS) {
+      printf("Failed to get number of supported extensions\n");
+      return 1;
+    }
+
+    VkExtensionProperties *ext_props = malloc(sizeof(VkExtensionProperties) * num_supported_exts);
+    result = vkEnumerateInstanceExtensionProperties(NULL, &num_supported_exts, ext_props);
+    if (result != VK_SUCCESS) {
+      printf("Failed to get supported extensions\n");
+      return 1;
+    }
+
+    for (uint32_t i = 0; i < num_supported_exts; i++) {
+      if (strcmp(VK_KHR_DISPLAY_EXTENSION_NAME, ext_props[i].extensionName) == 0) {
+        exts.display = true;
+        printf("instance extension %s is supported\n", VK_KHR_DISPLAY_EXTENSION_NAME);
+      } else if (strcmp(VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME, ext_props[i].extensionName)
+                 == 0) {
+        exts.display2 = true;
+        printf("instance extension %s is supported\n",
+               VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME);
+      } else if (strcmp(VK_KHR_SURFACE_EXTENSION_NAME, ext_props[i].extensionName) == 0) {
+        exts.surface = true;
+        printf("instance extension %s is supported\n", VK_KHR_SURFACE_EXTENSION_NAME);
+      }
+    }
+  }
+
+  if (!exts.surface) {
+    printf("Instance Extension %s is required\n", VK_KHR_SURFACE_EXTENSION_NAME);
+    return 1;
+  }
+  if (!exts.display && !exts.display2) {
+    printf("Instance Extension %s or %s is required\n",
+           VK_KHR_DISPLAY_EXTENSION_NAME,
+           VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME);
+    return 1;
+  }
+
+// VK_KHR_DISPLAY_EXTENSION_NAME and VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME
+#define optional_exts 2
+
+  const char *instance_exts[3 + optional_exts] = {
+      VK_KHR_SURFACE_EXTENSION_NAME,
+      VK_EXT_ACQUIRE_XLIB_DISPLAY_EXTENSION_NAME,
+      VK_EXT_DIRECT_MODE_DISPLAY_EXTENSION_NAME,
+  };
+  uint32_t num_instance_exts = 3;
+
+  if (exts.display) {
+    instance_exts[num_instance_exts++] = VK_KHR_DISPLAY_EXTENSION_NAME;
+  }
+  if (exts.display2) {
+    instance_exts[num_instance_exts++] = VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME;
+  }
+
+  const VkApplicationInfo application_info = {
+      .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+      .apiVersion = VK_API_VERSION_1_0,
+      .applicationVersion = 1,
+      .engineVersion = 0,
+      .pApplicationName = "vkdisplayinfo",
+      .pEngineName = NULL,
+  };
+
+  VkInstanceCreateInfo instance_info = {
+      .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+      .ppEnabledExtensionNames = (const char **) instance_exts,
+      .enabledExtensionCount = num_instance_exts,
+      .pApplicationInfo = &application_info,
+
+  };
+
+  VkInstance instance;
+  result = vkCreateInstance(&instance_info, NULL, &instance);
+  if (result != VK_SUCCESS) {
+    printf("Failed to create vulkan instance\n");
+    return 1;
+  }
+
+  PFN_vkGetRandROutputDisplayEXT _vkGetRandROutputDisplayEXT = _vkGetRandROutputDisplayEXT
+      = (PFN_vkGetRandROutputDisplayEXT) vkGetInstanceProcAddr(instance,
+                                                               "vkGetRandROutputDisplayEXT");
+
+  VkDisplayKHR d = get_display(instance, _vkGetRandROutputDisplayEXT, false);
 }
